@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Sphere Visualization with Speed Control</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.127.0/build/three.module.js';
+        import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.127.0/examples/jsm/controls/OrbitControls.js';
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('black');
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 15;
+        const renderer = new THREE.WebGLRenderer({ alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // OrbitControls setup
+        const controls = new OrbitControls(camera, renderer.domElement);
+
+        // Speed control
+        let travelSpeed = 0.9;
+
+        // Function to change speed programmatically
+        function setTravelSpeed(speed) {
+            travelSpeed = speed;
+            console.log(`Travel speed set to: ${speed}`);
+        }
+
+        // Starfield background
+        const starsGeometry = new THREE.BufferGeometry();
+        const starsMaterial = new THREE.PointsMaterial({ color: 0x888888, size: 0.1, sizeAttenuation: true });
+
+        const starsVertices = [];
+        for (let i = 0; i < 10000; i++) {
+            const x = THREE.MathUtils.randFloatSpread(2000);
+            const y = THREE.MathUtils.randFloatSpread(2000);
+            const z = THREE.MathUtils.randFloatSpread(2000);
+            starsVertices.push(x, y, z);
+        }
+
+        starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+        const starField = new THREE.Points(starsGeometry, starsMaterial);
+        scene.add(starField);
+
+        // Sphere with dots
+        const sphereRadius = 5;
+        const dotsAmount = 86400; // 24 hours * 60 minutes * 60 seconds
+        const dotsGeometry = new THREE.BufferGeometry();
+        const positions = [];
+        const colors = [];
+        const alphas = new Float32Array(dotsAmount);
+        const color = new THREE.Color();
+
+        for (let i = 0; i < dotsAmount; i++) {
+            const radius = Math.cbrt(Math.random()) * sphereRadius;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const theta = Math.random() * Math.PI * 2;
+
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = radius * Math.sin(phi) * Math.sin(theta);
+            const z = radius * Math.cos(phi);
+            positions.push(x, y, z);
+
+            color.setHSL(Math.random(), 0.7, 0.5);
+            colors.push(color.r, color.g, color.b);
+
+            alphas[i] = 1.0;
+        }
+
+        dotsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        dotsGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        dotsGeometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
+
+        // Shader material with transparency
+        const dotsMaterial = new THREE.ShaderMaterial({
+            uniforms: { time: { value: 1.0 } },
+            vertexShader: `
+                attribute float alpha;
+                varying float vAlpha;
+                varying vec3 vColor;
+                void main() {
+                    vAlpha = alpha;
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = 2.0;
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                varying float vAlpha;
+                varying vec3 vColor;
+                void main() {
+                    gl_FragColor = vec4(vColor, vAlpha);
+                }
+            `,
+            transparent: true,
+            vertexColors: true
+        });
+
+        const sphereDots = new THREE.Points(dotsGeometry, dotsMaterial);
+        scene.add(sphereDots);
+
+
+        // Shooting Star Setup
+        const maxTrailLength = 100;
+        const shootingStarTrailGeometry = new THREE.BufferGeometry();
+        const shootingStarTrailMaterial = new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.7,
+        });
+
+        const trailPositions = new Float32Array(maxTrailLength * 3);
+        const trailColors = new Float32Array(maxTrailLength * 3);
+        shootingStarTrailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+        shootingStarTrailGeometry.setAttribute('color', new THREE.BufferAttribute(trailColors, 3));
+        const shootingStarTrail = new THREE.Line(shootingStarTrailGeometry, shootingStarTrailMaterial);
+        scene.add(shootingStarTrail);
+
+        let shootingStarPosition = new THREE.Vector3();
+        let shootingStarDirection = new THREE.Vector3();
+        let shootingStarSpeed = 0;
+        let trailLength = 0;
+        let shootingStarColor = new THREE.Color();
+        let lastResetTime = Date.now();
+        let shootingStarActive = false;
+        let isFadingOut = false;
+        let fadeOutProgress = 0;
+        const fadeOutDuration = 30; // Number of frames for fade out
+
+        function resetShootingStar() {
+            const starIndex = Math.floor(Math.random() * dotsAmount);
+            shootingStarPosition.fromArray(dotsGeometry.attributes.position.array, starIndex * 3);
+            shootingStarDirection.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+            shootingStarSpeed = 0.1 + Math.random() * 0.2;
+            trailLength = 0;
+            shootingStarColor.setHSL(Math.random(), 0.7, 0.5);
+            shootingStarActive = true;
+            isFadingOut = false;
+            fadeOutProgress = 0;
+        }
+
+      // Handle window resize
+      window.addEventListener('resize', function() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Animation loop
+        let time = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+
+            time += 0.005;  // Increment time for smooth movement
+
+            // Move starfield to create the illusion of continuous forward movement
+            const starsPositions = starsGeometry.attributes.position.array;
+            for (let i = 0; i < starsPositions.length; i += 3) {
+                starsPositions[i + 2] += 0.5;  // Move stars along z-axis based on travel speed
+                if (starsPositions[i + 2] > 1000) {
+                    starsPositions[i + 2] -= 2000;  // Reset star position when it goes too far
+                }
+            }
+            starsGeometry.attributes.position.needsUpdate = true;
+
+            const date = new Date();
+            const currentTimeInSeconds = date.getSeconds();
+
+            // Only reset shooting star if 1 second has passed since the last reset and the star is not active
+            const currentTime = Date.now();
+            if (currentTime - lastResetTime >= 1000 && !shootingStarActive) {
+                lastResetTime = currentTime;
+                resetShootingStar();
+            }
+
+            // Update sphere dots
+            const totalSeconds = date.getHours() * 3600 + date.getMinutes() * 60 + currentTimeInSeconds;
+            const alphas = dotsGeometry.attributes.alpha.array;
+            for (let i = 0; i < dotsAmount; i++) {
+                alphas[i] = i < totalSeconds ? 0.0 : 1.0;
+            }
+            dotsGeometry.attributes.alpha.needsUpdate = true;
+
+            // Update shooting star
+            if (shootingStarActive) {
+                if (!isFadingOut) {
+                    shootingStarPosition.add(shootingStarDirection.clone().multiplyScalar(shootingStarSpeed));
+
+                    // Shift trail positions
+                    for (let i = maxTrailLength - 1; i > 0; i--) {
+                        trailPositions[i * 3] = trailPositions[(i - 1) * 3];
+                        trailPositions[i * 3 + 1] = trailPositions[(i - 1) * 3 + 1];
+                        trailPositions[i * 3 + 2] = trailPositions[(i - 1) * 3 + 2];
+                        
+                        trailColors[i * 3] = trailColors[(i - 1) * 3];
+                        trailColors[i * 3 + 1] = trailColors[(i - 1) * 3 + 1];
+                        trailColors[i * 3 + 2] = trailColors[(i - 1) * 3 + 2];
+                    }
+
+                    // Update head of trail
+                    trailPositions[0] = shootingStarPosition.x;
+                    trailPositions[1] = shootingStarPosition.y;
+                    trailPositions[2] = shootingStarPosition.z;
+
+                    trailColors[0] = shootingStarColor.r;
+                    trailColors[1] = shootingStarColor.g;
+                    trailColors[2] = shootingStarColor.b;
+
+                    if (trailLength < maxTrailLength) {
+                        trailLength++;
+                    }
+
+                    // Apply original fading effect
+                    for (let i = 0; i < trailLength; i++) {
+                        const alpha = 1 - (i / trailLength);
+                        trailColors[i * 3] *= alpha;
+                        trailColors[i * 3 + 1] *= alpha;
+                        trailColors[i * 3 + 2] *= alpha;
+                    }
+
+                    // Check if shooting star should start fading out
+                    if (shootingStarPosition.length() > 20) {
+                        isFadingOut = true;
+                    }
+                } else {
+                    // Fade out effect
+                    fadeOutProgress++;
+                    const fadeFactor = 1 - (fadeOutProgress / fadeOutDuration);
+
+                    for (let i = 0; i < trailLength; i++) {
+                        trailColors[i * 3] *= fadeFactor;
+                        trailColors[i * 3 + 1] *= fadeFactor;
+                        trailColors[i * 3 + 2] *= fadeFactor;
+                    }
+
+                    // Reset shooting star when fade out is complete
+                    if (fadeOutProgress >= fadeOutDuration) {
+                        shootingStarActive = false;
+                        lastResetTime = Date.now();
+                    }
+                }
+
+                shootingStarTrailGeometry.attributes.position.needsUpdate = true;
+                shootingStarTrailGeometry.attributes.color.needsUpdate = true;
+                shootingStarTrailGeometry.setDrawRange(0, trailLength);
+            }
+
+            sphereDots.rotation.x += 0.000175;
+            sphereDots.rotation.y += 0.00015;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+        
+        // Make setTravelSpeed function globally accessible
+        window.setTravelSpeed = setTravelSpeed;
+    </script>
+</body>
+</html>
